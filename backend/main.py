@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import google.generativeai as genai
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 
 # --- Setup & Configuration ---
 load_dotenv()
@@ -27,7 +29,7 @@ except Exception as e:
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Using 1.5 Pro or Flash. Flash is faster for standard tasks.
-model = genai.GenerativeModel('models/gemini-2.5-flash')
+model = genai.GenerativeModel('models/gemini-2.0-flash')
 
 app = FastAPI(title="Order-to-Cash Graph API")
 
@@ -98,6 +100,26 @@ Example 6 (Financial/Status Filtering):
 User: "Show me all complete orders over 15000."
 Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {status: 'C'})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toFloat(so.amount) > 15000 RETURN path LIMIT 20
 """
+# --- Resilient LLM Helper ---
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10), 
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
+    reraise=True
+)
+def safe_generate_content(prompt: str, require_json: bool = False):
+    """
+    Calls Gemini API with exponential backoff.
+    Only retries on 429 (Rate Limit) or 503 (Service Unavailable).
+    Gives up after 3 attempts.
+    """
+    logger.info("Calling LLM API...")
+    if require_json:
+        return model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(response_mime_type="application/json")
+        )
+    return model.generate_content(prompt)
 # --- Endpoints ---
 
 @app.get("/api/graph")
@@ -161,11 +183,8 @@ def chat_with_graph(request: ChatRequest):
     """
     
     try:
-        # Force JSON output for absolute reliability
-        response = model.generate_content(
-            master_prompt,
-            generation_config=genai.types.GenerationConfig(response_mime_type="application/json")
-        )
+        # Force JSON output for absolute reliability (Now with Retries!)
+        response = safe_generate_content(master_prompt, require_json=True)
         llm_data = __import__('json').loads(response.text)
         
         # Guardrail Check
@@ -211,12 +230,30 @@ def chat_with_graph(request: ChatRequest):
              4. If the data is empty, just reply: "No matching records found."
              """
              try:
-                 synthesis_response = model.generate_content(synthesis_prompt)
+                 # This will automatically retry if Gemini is temporarily overwhelmed
+                 synthesis_response = safe_generate_content(synthesis_prompt, require_json=False)
                  final_answer = synthesis_response.text + "\n\n*(Relevant nodes have been highlighted on the graph).*"
              except Exception as synth_error:
-                 logger.warning(f"Synthesis rate limited: {synth_error}")
-                 final_answer = "The database retrieved the records successfully, but my formatting engine is currently rate-limited. The exact flow has been highlighted on the graph."
-             
+                 logger.error(f"Synthesis API Error: {synth_error}")
+                 
+                 # ENTERPRISE FIX: Graceful Degradation
+                 # If the LLM rate limits, format the raw data programmatically instead of hiding it.
+                 fallback_lines = ["### Database Results (Auto-Formatted)\n"]
+                 
+                 # Limit to 5 so we don't blow up the chat UI with massive raw dumps
+                 for idx, record in enumerate(db_data[:5]):
+                     fallback_lines.append(f"**Result {idx + 1}**")
+                     for key, val in record.items():
+                         # Clean up Neo4j node objects for text display
+                         clean_val = dict(val) if hasattr(val, 'items') else str(val)
+                         fallback_lines.append(f"- **{key}**: `{clean_val}`")
+                     fallback_lines.append("\n---\n")
+                     
+                 if len(db_data) > 5:
+                     fallback_lines.append(f"*(Showing 5 of {len(db_data)} total results. Zoom into the graph to see the rest.)*")
+                 
+                 final_answer = "\n".join(fallback_lines)
+                 
         # Extract Semantic IDs from the raw database data to move the camera
         extracted_ids = re.findall(r'\b[A-Z0-9]{6,}\b', str(db_data))
         highlight_nodes.extend(list(set(extracted_ids)))
@@ -227,6 +264,7 @@ def chat_with_graph(request: ChatRequest):
             "cypher_query": cypher_query
         }
 
+    # THIS is the outer block that likely got disconnected due to indentation!
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         return ChatResponse(
