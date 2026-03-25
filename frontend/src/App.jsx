@@ -214,13 +214,16 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-2xl p-3 text-sm leading-relaxed ${
+              
+              {/* --- FDE FIX: ADDED whitespace-pre-wrap RIGHT HERE --- */}
+              <div className={`max-w-[85%] rounded-2xl p-3 text-sm leading-relaxed whitespace-pre-wrap ${
                 msg.role === 'user' 
                   ? 'bg-indigo-600 text-white rounded-br-none shadow-sm' 
                   : 'bg-slate-100 text-slate-800 rounded-bl-none'
               }`}>
                 {msg.content}
               </div>
+              
             </div>
           ))}
           {isLoading && (

@@ -27,7 +27,7 @@ except Exception as e:
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Using 1.5 Pro or Flash. Flash is faster for standard tasks.
-model = genai.GenerativeModel('models/gemini-2.5-flash')
+model = genai.GenerativeModel('models/gemini-2.5-pro')
 
 app = FastAPI(title="Order-to-Cash Graph API")
 
@@ -65,44 +65,39 @@ Nodes:
 - Payment (properties: id, amount, clearingDate)
 
 Relationships:
-- (Customer)-[:PLACED]->(SalesOrder)
-- (SalesOrder)-[:HAS_ITEM]->(SalesOrderItem)
-- (SalesOrderItem)-[:FOR_PRODUCT]->(Product)
-- (SalesOrder)-[:HAS_DELIVERY]->(OutboundDelivery)
-- (OutboundDelivery)-[:BILLED_IN]->(BillingDocument)
-- (BillingDocument)-[:PAID_BY]->(Payment)
+- (Customer)-[:PLACED]-(SalesOrder)
+- (SalesOrder)-[:HAS_ITEM]-(SalesOrderItem)
+- (SalesOrderItem)-[:FOR_PRODUCT]-(Product)
+- (SalesOrder)-[:HAS_DELIVERY]-(OutboundDelivery)
+- (OutboundDelivery)-[:BILLED_IN]-(BillingDocument)
+- (BillingDocument)-[:PAID_BY]-(Payment)
 """
 
 FEW_SHOT_EXAMPLES = """
 Example 1 (Order Flow):
 User: "Show me the flow for sales order 740506"
-Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {id: '740506'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN path
+Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {id: '740506'})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) RETURN path
 
 Example 2 (End-to-End Traceability):
 User: "Did order 740506 get paid?"
-Cypher: MATCH (so:SalesOrder {id: '740506'}) OPTIONAL MATCH path = (so)-[:HAS_DELIVERY]->(od:OutboundDelivery)-[:BILLED_IN]->(bd:BillingDocument)-[:PAID_BY]->(pay:Payment) RETURN so, path
+Cypher: MATCH (so:SalesOrder {id: '740506'}) OPTIONAL MATCH path = (so)-[:HAS_DELIVERY]-(od:OutboundDelivery)-[:BILLED_IN]-(bd:BillingDocument)-[:PAID_BY]-(pay:Payment) RETURN so, path
 
-Example 3 (Customer Aggregation):
+Example 3 (Customer Aggregation by Name):
 User: "What products did TechCorp Logistics buy?"
-Cypher: MATCH (c:Customer)-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) WHERE c.name CONTAINS 'TechCorp' RETURN DISTINCT p.description as Product, sum(toInteger(soi.quantity)) as TotalQuantity
+Cypher: MATCH (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE c.name CONTAINS 'TechCorp' RETURN DISTINCT p.description as Product, sum(toInteger(soi.quantity)) as TotalQuantity
 
-Example 4 (Order Flow):
-User: "Show me the flow for sales order 740506"
-Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {id: '740506'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN path
-
-Example 5 (Customer Aggregation):
+Example 4 (Customer Aggregation by ID):
 User: "What products did customer 310000108 buy?"
-Cypher: MATCH (c:Customer {id: '310000108'})-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN DISTINCT p.id as ProductID, sum(toInteger(soi.quantity)) as TotalQuantity
+Cypher: MATCH (c:Customer {id: '310000108'})-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) RETURN DISTINCT p.id as ProductID, sum(toInteger(soi.quantity)) as TotalQuantity
 
-Example 6 (Product Tracing for Recalls):
+Example 5 (Product Tracing for Recalls):
 User: "Which customers purchased product S8907367001003?"
-Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product {id: 'S8907367001003'}) RETURN path LIMIT 20
+Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product {id: 'S8907367001003'}) RETURN path LIMIT 20
 
-Example 7 (Financial/Status Filtering):
+Example 6 (Financial/Status Filtering):
 User: "Show me all complete orders over 15000."
-Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {status: 'C'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) WHERE toFloat(so.amount) > 15000 RETURN path LIMIT 20
+Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {status: 'C'})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toFloat(so.amount) > 15000 RETURN path LIMIT 20
 """
-
 # --- Endpoints ---
 
 @app.get("/api/graph")
@@ -146,42 +141,40 @@ def chat_with_graph(request: ChatRequest):
     user_msg = request.message
     logger.info(f"Received query: {user_msg}")
     
-    # --- FDE OPTIMIZATION: SINGLE PASS GENERATION ---
-    # We ask the LLM to do the guardrail, write the Cypher, and prep a generic response in ONE call.
+    # --- 1. Master Prompt for Cypher Generation ---
     master_prompt = f"""
-    You are an expert Neo4j data engineer and Order-to-Cash assistant.
-    User Question: "{user_msg}"
+    You are a Neo4j Cypher expert for an Order-to-Cash system.
+    Schema:
+    {GRAPH_SCHEMA}
     
-    Task 1: Is this question related to supply chain, orders, customers, or products? (Yes/No)
-    Task 2: If Yes, generate a Cypher query based on this schema: {GRAPH_SCHEMA}
+    Examples:
     {FEW_SHOT_EXAMPLES}
-    Limit queries to 20 results.
-    Task 3: If No, write a polite refusal.
     
-    Output exactly in this JSON format:
+    User Request: "{user_msg}"
+    
+    Return a JSON object exactly like this:
     {{
-        "is_valid": "Yes or No",
-        "cypher": "The raw cypher query or empty string",
-        "refusal_message": "Refusal text or empty string"
+        "is_valid": "YES or NO (NO if unrelated to supply chain/orders)",
+        "refusal_message": "If NO, explain why",
+        "cypher": "The Neo4j Cypher query to answer the request"
     }}
     """
     
     try:
-        # Force JSON output for absolute reliability (Gemini 2.5 feature)
+        # Force JSON output for absolute reliability
         response = model.generate_content(
             master_prompt,
             generation_config=genai.types.GenerationConfig(response_mime_type="application/json")
         )
-        # Parse the JSON string from the LLM into a Python dictionary
         llm_data = __import__('json').loads(response.text)
         
-        # 1. Guardrail Check (Now instantaneous)
+        # Guardrail Check
         if "NO" in llm_data.get("is_valid", "").upper():
             return ChatResponse(answer=llm_data.get("refusal_message", "I can only answer questions related to the Order-to-Cash dataset."))
             
         cypher_query = clean_cypher(llm_data.get("cypher", ""))
         
-        # 2. Database Execution
+        # --- 2. Database Execution ---
         db_data = []
         highlight_nodes = []
         
@@ -197,26 +190,45 @@ def chat_with_graph(request: ChatRequest):
                              if hasattr(item, 'element_id'):
                                  highlight_nodes.append(item.element_id)
                                  
-        # 3. Fast Data Synthesis (No second LLM call)
-        # We use a fast, deterministic template instead of calling the LLM again to read the DB.
+        # --- 3. Token-Optimized Markdown Synthesis ---
         if not db_data:
              final_answer = "I checked the database, but couldn't find any records matching that request."
         else:
-             # Convert the raw dictionary into a clean string for the user
-             clean_data = str(db_data[:3]) # Show max 3 records to keep it readable
-             final_answer = f"Here is what I found in the database:\n{clean_data}\n\n(I have highlighted the relevant nodes on the graph for you)."
+             synthesis_prompt = f"""
+             User Request: "{user_msg}"
+             Raw Data: {db_data}
              
-        # Extract Semantic IDs from the user's message (not the answer, since we template it now)
-        extracted_ids = re.findall(r'\b[A-Z0-9]{6,}\b', user_msg + str(db_data))
+             Task: Format the Raw Data into a highly readable, concise markdown report.
+             
+             RULES:
+             1. NO conversational filler (e.g., skip "Here are the results...").
+             2. Use EXACTLY this markdown structure for each record:
+             ### Order [ID]
+             - **Customer:** [Name]
+             - **Total:** [Amount] [Currency]
+             - **Items:** [Qty]x [Product Name], [Qty]x [Product Name]
+             3. MANDATORY: You MUST insert TWO newlines (\\n\\n) between different orders to separate them visually.
+             4. If the data is empty, just reply: "No matching records found."
+             """
+             try:
+                 synthesis_response = model.generate_content(synthesis_prompt)
+                 final_answer = synthesis_response.text + "\n\n*(Relevant nodes have been highlighted on the graph).*"
+             except Exception as synth_error:
+                 logger.warning(f"Synthesis rate limited: {synth_error}")
+                 final_answer = "The database retrieved the records successfully, but my formatting engine is currently rate-limited. The exact flow has been highlighted on the graph."
+             
+        # Extract Semantic IDs from the raw database data to move the camera
+        extracted_ids = re.findall(r'\b[A-Z0-9]{6,}\b', str(db_data))
         highlight_nodes.extend(list(set(extracted_ids)))
 
         return {
             "answer": final_answer,
-            "highlight_nodes": list(set(highlight_nodes))
+            "highlight_nodes": list(set(highlight_nodes)),
+            "cypher_query": cypher_query
         }
 
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         return ChatResponse(
-            answer="I encountered a complex database error or API timeout. Please try rephrasing.",
+            answer="I encountered a database error or API timeout. Please try rephrasing your request."
         )
