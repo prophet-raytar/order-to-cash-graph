@@ -27,7 +27,7 @@ except Exception as e:
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Using 1.5 Pro or Flash. Flash is faster for standard tasks.
-model = genai.GenerativeModel('models/gemini-2.0-flash')
+model = genai.GenerativeModel('models/gemini-2.5-flash')
 
 app = FastAPI(title="Order-to-Cash Graph API")
 
@@ -56,15 +56,21 @@ class ChatResponse(BaseModel):
 # --- Master Schema & Examples ---
 GRAPH_SCHEMA = """
 Nodes:
-- Customer (properties: id)
+- Customer (properties: id, name, city, country)
 - SalesOrder (properties: id, date, amount, currency, status)
 - SalesOrderItem (properties: id, itemNumber, quantity, amount, plant)
-- Product (properties: id)
+- Product (properties: id, description, category)
+- OutboundDelivery (properties: id, date)
+- BillingDocument (properties: id, amount, date)
+- Payment (properties: id, amount, clearingDate)
 
 Relationships:
 - (Customer)-[:PLACED]->(SalesOrder)
 - (SalesOrder)-[:HAS_ITEM]->(SalesOrderItem)
 - (SalesOrderItem)-[:FOR_PRODUCT]->(Product)
+- (SalesOrder)-[:HAS_DELIVERY]->(OutboundDelivery)
+- (OutboundDelivery)-[:BILLED_IN]->(BillingDocument)
+- (BillingDocument)-[:PAID_BY]->(Payment)
 """
 
 FEW_SHOT_EXAMPLES = """
@@ -72,15 +78,27 @@ Example 1 (Order Flow):
 User: "Show me the flow for sales order 740506"
 Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {id: '740506'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN path
 
-Example 2 (Customer Aggregation):
+Example 2 (End-to-End Traceability):
+User: "Did order 740506 get paid?"
+Cypher: MATCH (so:SalesOrder {id: '740506'}) OPTIONAL MATCH path = (so)-[:HAS_DELIVERY]->(od:OutboundDelivery)-[:BILLED_IN]->(bd:BillingDocument)-[:PAID_BY]->(pay:Payment) RETURN so, path
+
+Example 3 (Customer Aggregation):
+User: "What products did TechCorp Logistics buy?"
+Cypher: MATCH (c:Customer)-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) WHERE c.name CONTAINS 'TechCorp' RETURN DISTINCT p.description as Product, sum(toInteger(soi.quantity)) as TotalQuantity
+
+Example 4 (Order Flow):
+User: "Show me the flow for sales order 740506"
+Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {id: '740506'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN path
+
+Example 5 (Customer Aggregation):
 User: "What products did customer 310000108 buy?"
 Cypher: MATCH (c:Customer {id: '310000108'})-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) RETURN DISTINCT p.id as ProductID, sum(toInteger(soi.quantity)) as TotalQuantity
 
-Example 3 (Product Tracing for Recalls):
+Example 6 (Product Tracing for Recalls):
 User: "Which customers purchased product S8907367001003?"
 Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder)-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product {id: 'S8907367001003'}) RETURN path LIMIT 20
 
-Example 4 (Financial/Status Filtering):
+Example 7 (Financial/Status Filtering):
 User: "Show me all complete orders over 15000."
 Cypher: MATCH path = (c:Customer)-[:PLACED]->(so:SalesOrder {status: 'C'})-[:HAS_ITEM]->(soi:SalesOrderItem)-[:FOR_PRODUCT]->(p:Product) WHERE toFloat(so.amount) > 15000 RETURN path LIMIT 20
 """
@@ -94,7 +112,7 @@ def get_graph_data():
     query = """
     MATCH (n)-[r]->(m)
     RETURN n, r, m
-    LIMIT 200
+    LIMIT 2000
     """
     nodes_dict = {}
     links = []
