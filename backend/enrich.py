@@ -2,11 +2,13 @@ import json
 import os
 import glob
 from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
-# --- ADD YOUR CREDENTIALS HERE ---
-NEO4J_URI = "neo4j+s://e3ef4d8f.databases.neo4j.io"
-NEO4J_USER = "e3ef4d8f"
-NEO4J_PASSWORD = "VgCAdH0mO6sviu1qCg1uRmQfEWZDKuhuzs9mjsbhZuw"
+load_dotenv()
+
+NEO4J_URI = os.getenv("NEO4J_URI")
+NEO4J_USER = os.getenv("NEO4J_USER")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
@@ -222,6 +224,8 @@ def run_enrichment():
 
 if __name__ == "__main__":
     print("Starting Phase 2 graph enrichment...")
-    run_enrichment()
-    driver.close()
-    print("Finished!")
+    try:
+        run_enrichment()
+        print("Finished!")
+    finally:
+        driver.close()
