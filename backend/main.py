@@ -27,7 +27,7 @@ except Exception as e:
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 # Using 1.5 Pro or Flash. Flash is faster for standard tasks.
-model = genai.GenerativeModel('models/gemini-2.5-pro')
+model = genai.GenerativeModel('models/gemini-2.5-flash')
 
 app = FastAPI(title="Order-to-Cash Graph API")
 
