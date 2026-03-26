@@ -1,4 +1,4 @@
-const BASE = 'http://127.0.0.1:8000';
+const BASE = 'https://order-to-cash-graph-kjbs.onrender.com';
 
 export async function fetchGraph() {
   const res = await fetch(`${BASE}/api/graph`);
