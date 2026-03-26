@@ -6,9 +6,10 @@ from fastapi import APIRouter
 from models.schemas import ChatRequest, ChatResponse
 from services.neo4j_service import driver
 from services.llm_service import safe_generate_content, clean_cypher, PROMPT_TRACE, PROMPT_ANALYTICS
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 @router.post("/api/chat", response_model=ChatResponse)
@@ -83,6 +84,7 @@ def chat_with_graph(request: ChatRequest):
 
         # --- PHASE 4: ADAPTIVE SYNTHESIS ---
         final_answer = None
+        
         if not db_data:
              final_answer = "I checked the database, but couldn't find any records matching that specific criteria."
         else:
@@ -90,14 +92,15 @@ def chat_with_graph(request: ChatRequest):
              User Request: "{user_msg}"
              Raw Graph Data: {db_data}
              
-             Task: You are an Enterprise Data Formatter. Format the raw data dynamically.
+             Task: You are an Enterprise Data Formatter. Format the raw data dynamically into a highly readable summary.
              
              RULES:
              1. NO conversational filler (e.g., skip "Here are the results").
-             2. ADAPTIVE FORMATTING:
-                - IF Analytics/Leaderboard: ALWAYS format as a Markdown Table with columns (Rank | Product | Count).
-                - IF Specific Orders/Traces: ALWAYS put EACH entity on a strict NEW LINE using bullet points.
-             3. CRITICAL: You MUST use proper markdown line breaks (\\n) between every row or item so they do not clump together.
+             2. NEVER USE MARKDOWN TABLES. Tables break our UI text rendering.
+             3. FORMATTING: ALWAYS use a bulleted list. Put EACH entity or rank on a strict NEW LINE using double line breaks (\\n\\n).
+                Example format:
+                * **Rank 1**: [Product/Customer Name] - [Count]
+                * **Rank 2**: [Product/Customer Name] - [Count]
              4. Omit missing data. Never write "N/A".
              """
              try:
@@ -105,14 +108,18 @@ def chat_with_graph(request: ChatRequest):
                  final_answer = synthesis_response.text + "\n\n*(Relevant nodes have been highlighted on the graph).*"
              except Exception as synth_error:
                  logger.error(f"Synthesis Fallback Triggered: {synth_error}")
-                 fallback_lines = ["### Database Results (Auto-Formatted)\n"]
+                 fallback_lines = ["### Database Results\n"]
                  for idx, record in enumerate(db_data[:10]):
                      fallback_lines.append(f"**Result {idx + 1}**")
                      for key, val in record.items():
-                         clean_val = dict(val) if hasattr(val, 'items') else str(val)
-                         fallback_lines.append(f"- **{key}**: `{clean_val}`")
-                     fallback_lines.append("\n---\n")
-                 final_answer = "\n".join(fallback_lines)
+                         # Clean up raw dictionaries for the UI
+                         if isinstance(val, dict):
+                             clean_val = val.get('description', val.get('name', val.get('id', str(val))))
+                         else:
+                             clean_val = str(val)
+                         fallback_lines.append(f"* **{key}**: {clean_val}")
+                     fallback_lines.append("\n")
+                 final_answer = "\n".join(fallback_lines) + "\n\n*(Relevant nodes have been highlighted on the graph).*"
                  
         # Extract Semantic IDs safely
         extracted_ids = re.findall(r'\b(?=.*\d)[A-Z0-9]{6,}\b', str(db_data))
@@ -131,9 +138,22 @@ def chat_with_graph(request: ChatRequest):
             "cypher_query": cypher_query
         }
 
+    except ResourceExhausted:
+        # Catch the 429 cleanly without dumping the massive Google payload
+        logger.error("Chat error: Gemini API quota exceeded (429).")
+        return ChatResponse(
+            answer="⚠️ **System Alert:** The AI token limit for today has been exhausted. Please try again later or check your API billing tier.",
+            highlight_nodes=[],
+            new_nodes=[],
+            new_links=[]
+        )
     except Exception as e:
+        # Handle all other generic errors
         logger.error(f"Chat error: {str(e)}")
         return ChatResponse(
-            answer="I encountered a database error or API timeout. Please try rephrasing your request."
+            answer="I encountered a database error or API timeout. Please try rephrasing your request.",
+            highlight_nodes=[],
+            new_nodes=[],
+            new_links=[]
         )
 

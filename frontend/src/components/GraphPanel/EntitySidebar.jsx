@@ -1,12 +1,45 @@
 import React, { useState, useEffect } from 'react';
 import { X, Hash, Calendar, Box, User, Tag, Info, Code, LayoutList, Network } from 'lucide-react';
 
+// 1. UPGRADED: Strips out the "Json" suffix so "CreationTimeJson" becomes "Creation Time"
 const formatKey = (key) => {
   return key
+    .replace(/Json$/i, '') 
     .replace(/_/g, ' ')
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (str) => str.toUpperCase())
     .trim();
+};
+
+// 2. NEW: Intercepts raw database strings and makes them human-readable
+const formatNodeValue = (key, value) => {
+  if (value === null || value === undefined || value === '') return 'N/A';
+
+  // Handle the stringified "Time Json" payload
+  if (typeof value === 'string' && value.includes('"hours"')) {
+    try {
+      const timeObj = JSON.parse(value);
+      const h = String(timeObj.hours).padStart(2, '0');
+      const m = String(timeObj.minutes).padStart(2, '0');
+      const s = String(timeObj.seconds).padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    } catch (e) {
+      // Fallback if parsing fails
+      return String(value); 
+    }
+  }
+
+  // Handle the raw ISO Date strings (e.g., 2025-07-24T00:00:00.000Z)
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const date = new Date(value);
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    });
+  }
+
+  return String(value);
 };
 
 const getIcon = (key) => {
@@ -18,7 +51,6 @@ const getIcon = (key) => {
   return <Tag className="w-4 h-4 text-slate-400" />;
 };
 
-// Notice we explicitly accept onExpand here!
 export function EntitySidebar({ node, onClose, onExpand }) {
   const isOpen = !!node;
   const [showJson, setShowJson] = useState(false);
@@ -58,7 +90,6 @@ export function EntitySidebar({ node, onClose, onExpand }) {
             
             {showJson ? (
               <div className="bg-slate-900 rounded-xl p-4 overflow-x-auto shadow-inner">
-                {/* We strictly stringify node.properties to avoid physics engine crashes */}
                 <pre className="text-xs text-emerald-400 font-mono leading-relaxed">
                   {JSON.stringify(node.properties || {}, null, 2)}
                 </pre>
@@ -71,8 +102,9 @@ export function EntitySidebar({ node, onClose, onExpand }) {
                       {getIcon(key)}
                       <span className="text-xs font-medium text-slate-500">{formatKey(key)}</span>
                     </div>
+                    {/* 3. APPLIED: We replaced String(val) with our new formatter function! */}
                     <div className="text-sm font-semibold text-slate-800 break-words">
-                      {String(val)}
+                      {formatNodeValue(key, val)}
                     </div>
                   </div>
                 ))}
