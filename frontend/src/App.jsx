@@ -1,6 +1,5 @@
 import React, { useRef } from 'react';
 
-// Notice we only import this once now!
 import { useWindowSize }   from './hooks/useWindowSize.js';
 import { useResizable }    from './hooks/useResizable.js';
 import { useGraphData }    from './hooks/useGraphData.js';
@@ -41,11 +40,9 @@ export default function App() {
         });
       }
 
-      // 2. Zoom to the highlighted nodes (with a Senior Engineer trick)
+      // 2. Zoom to the highlighted nodes
       const nodeIds = responseData.highlight_nodes || [];
       if (nodeIds.length && fgRef.current) {
-        // We add a tiny delay. Because setGraphData is asynchronous, 
-        // we must give React 100ms to draw the new nodes before we zoom to them!
         setTimeout(() => {
           fgRef.current.zoomToFit(
             400,
@@ -58,12 +55,10 @@ export default function App() {
   };
 
   // --- ENTERPRISE FIX: Lazy Loading Graph Expansion ---
-  // --- ENTERPRISE FIX: Lazy Loading Graph Expansion (With Diagnostics) ---
   const handleExpandNode = async (nodeId) => {
     console.log(`[Step 1] Expand button clicked for Node ID: ${nodeId}`);
     
     try {
-      // 1. Fetch the neighbors from our new backend endpoint
       console.log(`[Step 2] Sending request to http://localhost:8000/api/expand/${nodeId}`);
       const response = await fetch(`http://localhost:8000/api/expand/${encodeURIComponent(nodeId)}`);
       
@@ -74,7 +69,17 @@ export default function App() {
       const newData = await response.json();
       console.log(`[Step 3] Backend replied with ${newData.nodes.length} nodes and ${newData.links.length} links.`);
 
-      // 2. Surgically merge the new data to avoid physics engine crashes
+      // --- THE FIX: Check for duplicates OUTSIDE the React state updater ---
+      const currentNodes = graphData.nodes || [];
+      const existingNodeIdsForCheck = new Set(currentNodes.map(n => n.id));
+      const hasNewNodes = newData.nodes.some(n => !existingNodeIdsForCheck.has(n.id));
+
+      if (!hasNewNodes) {
+        alert("All connections for this node are already visible on the graph!");
+        return; // Kills the function instantly so React doesn't double-render!
+      }
+
+      // 2. Surgically merge the new data
       setGraphData(prevData => {
         const existingNodeIds = new Set(prevData.nodes.map(n => n.id));
         const existingLinkIds = new Set(prevData.links.map(l => `${l.source.id || l.source}-${l.target.id || l.target}`));
@@ -83,12 +88,6 @@ export default function App() {
         const newLinks = newData.links.filter(l => !existingLinkIds.has(`${l.source}-${l.target}`));
 
         console.log(`[Step 4] After filtering duplicates, injecting ${newNodes.length} completely new nodes!`);
-
-        // Give the user visual feedback if everything is already visible
-        if (newNodes.length === 0) {
-          alert("All connections for this node are already visible on the graph!");
-          return prevData;
-        }
 
         return {
           nodes: [...prevData.nodes, ...newNodes],
@@ -101,10 +100,11 @@ export default function App() {
       alert(`Expansion Failed: Look at the Developer Console (F12) for details.\nError: ${error.message}`);
     }
   };
+
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans overflow-hidden">
       <GraphPanel
-        ref={fgRef} // FIX 3: Attach the camera reference here
+        ref={fgRef}
         graphData={graphData} 
         highlightNodes={highlightNodes}
         width={dimensions.width}
