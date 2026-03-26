@@ -59,8 +59,8 @@ export default function App() {
     console.log(`[Step 1] Expand button clicked for Node ID: ${nodeId}`);
     
     try {
-      console.log(`[Step 2] Sending request to http://localhost:8000/api/expand/${nodeId}`);
-      const response = await fetch(`http://localhost:8000/api/expand/${encodeURIComponent(nodeId)}`);
+      console.log(`[Step 2] Sending request to https://order-to-cash-graph-kjbs.onrender.com/api/expand/${nodeId}`);
+      const response = await fetch(`https://order-to-cash-graph-kjbs.onrender.com/api/expand/${encodeURIComponent(nodeId)}`);
       
       if (!response.ok) {
         throw new Error(`Backend returned status ${response.status}`);
