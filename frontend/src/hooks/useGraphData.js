@@ -14,5 +14,6 @@ export function useGraphData() {
       });
   }, []);
 
-  return { graphData, error };
+  // Ensure we are returning BOTH the data and the function to update it
+  return { graphData, setGraphData };
 }

@@ -31,10 +31,15 @@ export function useChatMessages() {
       const data = await sendChatMessage(userText, messages);
       setMessages((prev) => [...prev, { role: 'assistant', content: data.answer }]);
 
+      // 1. Still set the local highlight state for the UI
       if (data.highlight_nodes?.length) {
         setHighlightNodes(new Set(data.highlight_nodes));
-        return data.highlight_nodes; // caller uses this to zoom the graph
       }
+      
+      // 2. ENTERPRISE FIX: Return the ENTIRE data object back to App.jsx!
+      // Now App.jsx gets the new_nodes, new_links, AND highlight_nodes.
+      return data; 
+      
     } catch {
       setMessages((prev) => [
         ...prev,

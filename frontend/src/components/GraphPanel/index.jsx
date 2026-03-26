@@ -1,14 +1,16 @@
 import React, { useState, forwardRef } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
-import { NodeTooltip } from './NodeTooltip';
+import { EntitySidebar } from './EntitySidebar';
 import { usePaintNode } from './usePaintNode';
 
-export const GraphPanel = forwardRef(({ graphData, highlightNodes, width, height }, ref) => {
+export const GraphPanel = forwardRef(({ graphData, highlightNodes, width, height, onExpandNode }, ref) => {
   const [hoverNode, setHoverNode] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(null);
+  
   const paintNode = usePaintNode(highlightNodes, hoverNode);
 
   return (
-    <div className="relative bg-slate-50" style={{ width, height }}>
+    <div className="relative bg-slate-50 overflow-hidden" style={{ width, height }}>
       <ForceGraph2D
         ref={ref}
         width={width}
@@ -16,8 +18,15 @@ export const GraphPanel = forwardRef(({ graphData, highlightNodes, width, height
         graphData={graphData}
         nodeCanvasObject={paintNode}
         onNodeHover={setHoverNode}
+        onNodeClick={setSelectedNode}
+        onBackgroundClick={() => setSelectedNode(null)}
       />
-      <NodeTooltip node={hoverNode} />
+      
+      <EntitySidebar 
+        node={selectedNode} 
+        onClose={() => setSelectedNode(null)} 
+        onExpand={onExpandNode}
+      />
     </div>
   );
 });
