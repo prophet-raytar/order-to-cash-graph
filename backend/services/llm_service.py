@@ -39,18 +39,21 @@ Schema: {GRAPH_SCHEMA}
 
 CRITICAL RULES:
 1. ALWAYS use this base traversal: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product)
-2. ALWAYS return the 'path' variable so the UI can draw the lines.
-3. ALWAYS append 'LIMIT 15' to prevent browser DOM crashes.
-4. EXACT IDs: If searching by an exact ID (like an order number), use {{id: 'X'}}.
-5. FUZZY SEARCH (TEXT): If the user provides a product description, customer name, or city, NEVER use exact property matching. ALWAYS use case-insensitive CONTAINS.
-   Example: WHERE toLower(p.description) CONTAINS toLower('Blanc')
+2. OPTIONAL EXPANSION: If the user asks for the *full* flow, billing, or deliveries, extend the path using OPTIONAL MATCH:
+   OPTIONAL MATCH path_ext = (so)-[:HAS_DELIVERY]->(od:OutboundDelivery)-[:BILLED_IN]->(bd:BillingDocument)<-[:PAID_BY]-(pay:Payment)
+3. ALWAYS return the 'path' variable so the UI can draw the lines. (If using path_ext, return path, path_ext).
+4. ALWAYS append 'LIMIT 15' to prevent browser DOM crashes.
+5. EXACT IDs: If searching by an exact ID, use {{id: 'X'}}.
+6. FUZZY SEARCH: Always use case-insensitive CONTAINS. Example: WHERE toLower(p.description) CONTAINS toLower('Blanc')
+7. STATUS CODES: "Complete" means WHERE so.status = 'C'. "Open" or "Pending" means WHERE so.status IN ['A', 'B'].
+8. BROKEN FLOWS: To trace broken/incomplete flows, use OPTIONAL MATCH for deliveries/billing and add WHERE od IS NULL OR bd IS NULL.
 
 Examples:
 User: "Show me the flow for sales order 740506"
 Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {{id: '740506'}})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) RETURN path LIMIT 15
 
-User: "Which customers purchased BLANC deodorant?"
-Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toLower(p.description) CONTAINS toLower('blanc') RETURN path LIMIT 15
+User: "Trace all complete orders over 15000"
+Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE so.status = 'C' AND toFloat(so.amount) > 15000 RETURN path LIMIT 15
 """
 
 # Agent 2: The Analytics Specialist
@@ -59,19 +62,22 @@ You are an Enterprise Graph Data Scientist. Your ONLY job is to write Cypher for
 Schema: {GRAPH_SCHEMA}
 
 CRITICAL RULES:
-CRITICAL RULES:
 1. When aggregating, NEVER just return string IDs (like c.id). You MUST return the actual Node objects (e.g., RETURN p AS Product, c AS Customer) so our backend can extract their internal IDs and auto-inject them.
 2. ALWAYS use toFloat() for amounts/costs and toInteger() for quantities.
 3. ALWAYS use ORDER BY and LIMIT 15.
-4. FUZZY SEARCH (TEXT): If filtering by product name, customer name, or category, NEVER use exact matching. ALWAYS use case-insensitive CONTAINS.
-   Example: WHERE toLower(p.description) CONTAINS toLower('blanc')
+4. FUZZY SEARCH: Always use case-insensitive CONTAINS for text.
+5. STATUS CODES: "Complete" means WHERE so.status = 'C'. "Open" or "Pending" means WHERE so.status IN ['A', 'B'].
+6. BROKEN FLOWS: If asked for broken/incomplete flows, find SalesOrders missing a delivery, or Deliveries missing a billing document using OPTIONAL MATCH and IS NULL.
 
 Examples:
 User: "Which products are associated with the highest number of billing documents?"
-Cypher: MATCH (p:Product)<-[:FOR_PRODUCT]-(soi:SalesOrderItem)<-[:HAS_ITEM]-(so:SalesOrder)-[:HAS_DELIVERY]-(od:OutboundDelivery)-[:BILLED_IN]-(bd:BillingDocument) RETURN p.id as ProductID, p.description as Product, count(DISTINCT bd) as BillingCount ORDER BY count(DISTINCT bd) DESC LIMIT 15
+Cypher: MATCH (p:Product)<-[:FOR_PRODUCT]-(soi:SalesOrderItem)<-[:HAS_ITEM]-(so:SalesOrder)-[:HAS_DELIVERY]-(od:OutboundDelivery)-[:BILLED_IN]-(bd:BillingDocument) RETURN p AS Product, count(DISTINCT bd) as BillingCount ORDER BY count(DISTINCT bd) DESC LIMIT 15
 
 User: "Find customers with the most orders where individual product cost is below 700."
-Cypher: MATCH (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toFloat(soi.amount) < 700 RETURN c.id as CustomerID, c.name as CustomerName, count(DISTINCT so) as OrderCount ORDER BY count(DISTINCT so) DESC LIMIT 15
+Cypher: MATCH (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toFloat(soi.amount) < 700 RETURN c AS Customer, count(DISTINCT so) as OrderCount ORDER BY count(DISTINCT so) DESC LIMIT 15
+
+User: "Identify sales orders that have broken or incomplete flows"
+Cypher: MATCH (so:SalesOrder) OPTIONAL MATCH (so)-[:HAS_DELIVERY]->(od:OutboundDelivery) OPTIONAL MATCH (od)-[:BILLED_IN]->(bd:BillingDocument) WHERE od IS NULL OR bd IS NULL RETURN so AS SalesOrder, count(so) as IssueCount ORDER BY IssueCount DESC LIMIT 15
 """
 
 
