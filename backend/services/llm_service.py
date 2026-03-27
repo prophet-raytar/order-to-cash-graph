@@ -50,7 +50,7 @@ CRITICAL RULES:
 
 Examples:
 User: "Show me the flow for sales order 740506"
-Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {{id: '740506'}})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODU
+Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder {{id: '740506'}})-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) RETURN path LIMIT 15
 
 User: "Which customers purchased BLANC deodorant?"
 Cypher: MATCH path = (c:Customer)-[:PLACED]-(so:SalesOrder)-[:HAS_ITEM]-(soi:SalesOrderItem)-[:FOR_PRODUCT]-(p:Product) WHERE toLower(p.description) CONTAINS toLower('blanc') RETURN path LIMIT 15
